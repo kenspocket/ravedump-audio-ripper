@@ -4,6 +4,7 @@ RAVEDUMP RIPPER - Audio Extraction Tool
 Extracts audio from video files (including broken/corrupted files)
 Reads from: ./To_Rip/
 Saves to: ./Rips/
+Config: ./config/
 """
 
 import os
@@ -11,23 +12,36 @@ import subprocess
 import sys
 import time
 import re
+import json
+import platform
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from datetime import datetime
 
 try:
     from tqdm import tqdm
 except ImportError:
-    print("ERROR: tqdm not installed. Install with: pip3 install tqdm")
+    print("❌ ERROR: tqdm not installed. Install with: pip3 install tqdm")
     sys.exit(1)
 
 # Directories
 SCRIPT_DIR = Path(__file__).parent.absolute()
 SOURCE_DIR = SCRIPT_DIR / "To_Rip"
 DEST_DIR = SCRIPT_DIR / "Rips"
+CONFIG_DIR = SCRIPT_DIR / "config"
+CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 # Supported video extensions
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.mpg', '.mpeg'}
+
+# Default config
+DEFAULT_CONFIG = {
+    'audio_bitrate': '192k',
+    'sample_rate': '44100',
+    'output_format': 'aac',
+    'timeout': 300,
+    'auto_open_folder': False
+}
 
 # Statistics
 stats = {
@@ -62,7 +76,7 @@ def print_banner():
 ║                ██║  ██║██║██║     ██║     ███████╗██║  ██║                  ║
 ║                ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝                  ║
 ║                                                                              ║
-║                    Audio Extraction & Recovery Tool v2.0                    ║
+║              4ud10 3xtr4ct10n & R3c0v3ry T00l v2.1 - Pr0p3r L33t           ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
@@ -70,9 +84,32 @@ def print_banner():
 
 
 def create_directories():
-    """Create source and destination directories if they don't exist"""
+    """Create source, destination and config directories if they don't exist"""
     SOURCE_DIR.mkdir(exist_ok=True)
     DEST_DIR.mkdir(exist_ok=True)
+    CONFIG_DIR.mkdir(exist_ok=True)
+
+
+def load_config() -> Dict:
+    """Load config from file or create default"""
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return {**DEFAULT_CONFIG, **json.load(f)}
+        except:
+            return DEFAULT_CONFIG
+    else:
+        save_config(DEFAULT_CONFIG)
+        return DEFAULT_CONFIG
+
+
+def save_config(config: Dict):
+    """Save config to file"""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"⚠️  Couldn't save config bruv: {e}")
 
 
 def check_ffmpeg():
@@ -145,15 +182,21 @@ def get_video_duration(file_path: Path) -> Optional[float]:
     return None
 
 
-def extract_audio_with_progress(input_file: Path, progress_bar: tqdm) -> Tuple[bool, str]:
+def extract_audio_with_progress(input_file: Path, progress_bar: tqdm, config: Dict) -> Tuple[bool, str]:
     """
     Extract audio from video file using ffmpeg with progress monitoring
     Returns: (success, method) where method is 'copy', 'reencode', or 'failed'
     """
-    output_file = DEST_DIR / f"{input_file.stem}.aac"
+    output_ext = config.get('output_format', 'aac')
+    output_file = DEST_DIR / f"{input_file.stem}.{output_ext}"
 
     # Update progress bar description
-    progress_bar.set_description(f"[RIPPING] {input_file.name[:40]}")
+    display_name = input_file.name[:40] if len(input_file.name) > 40 else input_file.name
+    progress_bar.set_description(f"🎵 [R1PP1NG] {display_name}")
+
+    # Show full path in console
+    print(f"\n📂 Source: {input_file.absolute()}")
+    print(f"📂 Dest:   {output_file.absolute()}")
 
     # Get video duration for progress calculation
     duration = get_video_duration(input_file)
@@ -187,32 +230,32 @@ def extract_audio_with_progress(input_file: Path, progress_bar: tqdm) -> Tuple[b
                     time_ms = int(line.split('=')[1])
                     time_s = time_ms / 1000000
                     percent = min(100, (time_s / duration) * 100)
-                    progress_bar.set_postfix(progress=f"{percent:.1f}%", method="COPY")
+                    progress_bar.set_postfix(progress=f"{percent:.1f}%", method="C0PY")
                 except:
                     pass
 
-        process.wait(timeout=300)
+        process.wait(timeout=config.get('timeout', 300))
 
         if process.returncode == 0 and output_file.exists():
-            progress_bar.set_postfix(status="✓ COPIED", size=format_size(get_file_size(output_file)))
+            progress_bar.set_postfix(status="✅ C0P13D", size=format_size(get_file_size(output_file)))
             stats['copied'] += 1
             return True, 'copy'
         else:
             # Try re-encoding
-            progress_bar.set_description(f"[RE-ENC] {input_file.name[:40]}")
-            return extract_audio_reencode(input_file, output_file, progress_bar)
+            progress_bar.set_description(f"🔄 [R3-3NC] {display_name}")
+            return extract_audio_reencode(input_file, output_file, progress_bar, config)
 
     except subprocess.TimeoutExpired:
         if process:
             process.kill()
-        progress_bar.set_postfix(status="✗ TIMEOUT")
+        progress_bar.set_postfix(status="❌ T1M30UT")
         return False, 'failed'
     except Exception as e:
-        progress_bar.set_postfix(status=f"✗ ERROR")
+        progress_bar.set_postfix(status=f"❌ 3RR0R")
         return False, 'failed'
 
 
-def extract_audio_reencode(input_file: Path, output_file: Path, progress_bar: tqdm) -> Tuple[bool, str]:
+def extract_audio_reencode(input_file: Path, output_file: Path, progress_bar: tqdm, config: Dict) -> Tuple[bool, str]:
     """
     Extract and re-encode audio (fallback method)
     """
@@ -225,8 +268,8 @@ def extract_audio_reencode(input_file: Path, output_file: Path, progress_bar: tq
         '-i', str(input_file),
         '-vn',
         '-acodec', 'aac',
-        '-b:a', '192k',
-        '-ar', '44100',
+        '-b:a', config.get('audio_bitrate', '192k'),
+        '-ar', config.get('sample_rate', '44100'),
         '-progress', 'pipe:1',
         '-y',
         str(output_file)
@@ -247,43 +290,43 @@ def extract_audio_reencode(input_file: Path, output_file: Path, progress_bar: tq
                     time_ms = int(line.split('=')[1])
                     time_s = time_ms / 1000000
                     percent = min(100, (time_s / duration) * 100)
-                    progress_bar.set_postfix(progress=f"{percent:.1f}%", method="RE-ENC")
+                    progress_bar.set_postfix(progress=f"{percent:.1f}%", method="R3-3NC")
                 except:
                     pass
 
-        process.wait(timeout=300)
+        process.wait(timeout=config.get('timeout', 300))
 
         if process.returncode == 0 and output_file.exists():
-            progress_bar.set_postfix(status="✓ RE-ENC", size=format_size(get_file_size(output_file)))
+            progress_bar.set_postfix(status="✅ R3-3NC0D3D", size=format_size(get_file_size(output_file)))
             stats['reencoded'] += 1
             return True, 'reencode'
         else:
-            progress_bar.set_postfix(status="✗ FAILED")
+            progress_bar.set_postfix(status="❌ F41L3D")
             return False, 'failed'
 
     except subprocess.TimeoutExpired:
         if process:
             process.kill()
-        progress_bar.set_postfix(status="✗ TIMEOUT")
+        progress_bar.set_postfix(status="❌ T1M30UT")
         return False, 'failed'
     except Exception as e:
-        progress_bar.set_postfix(status="✗ ERROR")
+        progress_bar.set_postfix(status="❌ 3RR0R")
         return False, 'failed'
 
 
-def process_files(video_files: List[Path]):
+def process_files(video_files: List[Path], config: Dict):
     """Process all video files with progress bars"""
     stats['start_time'] = time.time()
     stats['total_files'] = len(video_files)
 
     print("\n" + "═" * 80)
-    print("STARTING RIP PROCESS")
+    print("🚀 ST4RT1NG R1P PR0C3SS - L3T'S 4V3 1T! 🚀")
     print("═" * 80 + "\n")
 
     # Main progress bar for overall progress
     with tqdm(total=len(video_files),
-              desc="[OVERALL]",
-              unit="file",
+              desc="📊 [0V3R4LL]",
+              unit=" fil3",
               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
               position=0) as pbar:
 
@@ -293,11 +336,11 @@ def process_files(video_files: List[Path]):
             stats['total_size_input'] += input_size
 
             # Process file
-            success, method = extract_audio_with_progress(video_file, pbar)
+            success, method = extract_audio_with_progress(video_file, pbar, config)
 
             if success:
                 stats['successful'] += 1
-                output_file = DEST_DIR / f"{video_file.stem}.aac"
+                output_file = DEST_DIR / f"{video_file.stem}.{config.get('output_format', 'aac')}"
                 stats['total_size_output'] += get_file_size(output_file)
             else:
                 stats['failed'] += 1
@@ -313,29 +356,44 @@ def print_statistics():
     duration = stats['end_time'] - stats['start_time']
 
     print("\n" + "═" * 80)
-    print("RIP COMPLETE - STATISTICS")
+    print("🎉 R1P C0MPL3T3 - CH3CK TH3 ST4TS M8! 🎉")
     print("═" * 80)
-    print(f"Total Files:        {stats['total_files']}")
-    print(f"  ✓ Successful:     {stats['successful']} ({stats['successful']/stats['total_files']*100:.1f}%)")
-    print(f"  ✗ Failed:         {stats['failed']}")
-    print(f"\nExtraction Methods:")
-    print(f"  Fast Copy:        {stats['copied']}")
-    print(f"  Re-encoded:       {stats['reencoded']}")
-    print(f"\nData Processed:")
-    print(f"  Input Size:       {format_size(stats['total_size_input'])}")
-    print(f"  Output Size:      {format_size(stats['total_size_output'])}")
+    print(f"📦 Total Fil3s:        {stats['total_files']}")
+    print(f"  ✅ Succ3ssful:       {stats['successful']} ({stats['successful']/stats['total_files']*100:.1f}%)")
+    print(f"  ❌ F41l3d:           {stats['failed']}")
+    print(f"\n🔧 3xtr4ct10n M3th0ds:")
+    print(f"  ⚡ F4st C0py:        {stats['copied']}")
+    print(f"  🔄 R3-3nc0d3d:       {stats['reencoded']}")
+    print(f"\n💾 D4t4 Pr0c3ss3d:")
+    print(f"  📥 Input S1z3:       {format_size(stats['total_size_input'])}")
+    print(f"  📤 0utput S1z3:      {format_size(stats['total_size_output'])}")
 
     if stats['total_size_input'] > 0:
         compression = (1 - stats['total_size_output'] / stats['total_size_input']) * 100
-        print(f"  Compression:      {compression:.1f}%")
+        print(f"  🗜️  C0mpr3ss10n:      {compression:.1f}%")
 
-    print(f"\nTime Elapsed:       {format_time(duration)}")
+    print(f"\n⏱️  T1m3 3l4ps3d:       {format_time(duration)}")
     if duration > 0:
         avg_time = duration / stats['total_files']
-        print(f"Average per file:   {format_time(avg_time)}")
+        print(f"⏱️  4v3r4g3 p3r fil3:  {format_time(avg_time)}")
 
-    print(f"\nOutput Directory:   {DEST_DIR}")
+    print(f"\n📂 0utput D1r3ct0ry:   {DEST_DIR.absolute()}")
     print("═" * 80 + "\n")
+
+
+def open_folder(path: Path):
+    """Open folder in file explorer"""
+    try:
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(str(path))
+        elif system == 'Darwin':  # macOS
+            subprocess.run(['open', str(path)])
+        else:  # Linux
+            subprocess.run(['xdg-open', str(path)])
+        print(f"📂 0p3n3d: {path.absolute()}")
+    except Exception as e:
+        print(f"⚠️  C0uldn't 0p3n f0ld3r bruv: {e}")
 
 
 def list_files():
@@ -344,25 +402,27 @@ def list_files():
 
     if not video_files:
         print("\n╔════════════════════════════════════════════════════════════════╗")
-        print("║  NO FILES FOUND                                                ║")
+        print("║  ❌ N0 F1L3S F0UND - 3MPTY INN1T!                              ║")
         print("╚════════════════════════════════════════════════════════════════╝")
-        print(f"\nNo video files in: {SOURCE_DIR}")
-        print(f"Supported formats: {', '.join(sorted(VIDEO_EXTENSIONS))}")
+        print(f"\n📂 Source Path: {SOURCE_DIR.absolute()}")
+        print(f"📋 Supp0rt3d f0rm4ts: {', '.join(sorted(VIDEO_EXTENSIONS))}")
+        print("\n💡 Dr0p s0m3 vid30s in th3r3 m8!")
         return
 
     print("\n╔════════════════════════════════════════════════════════════════╗")
-    print(f"║  FILES IN TO_RIP FOLDER: {len(video_files)} file(s)")
-    print("╚════════════════════════════════════════════════════════════════╝\n")
+    print(f"║  📼 F1L3S 1N T0_R1P F0LD3R: {len(video_files)} fil3(s)")
+    print("╚════════════════════════════════════════════════════════════════╝")
+    print(f"\n📂 Full Path: {SOURCE_DIR.absolute()}\n")
 
     total_size = 0
     for i, file_path in enumerate(video_files, 1):
         size = get_file_size(file_path)
         total_size += size
         duration = get_video_duration(file_path)
-        dur_str = f" [{format_time(duration)}]" if duration else ""
-        print(f"  {i:2d}. {file_path.name[:50]:50s} {format_size(size):>10s}{dur_str}")
+        dur_str = f" ⏱️ [{format_time(duration)}]" if duration else ""
+        print(f"  {i:2d}. 📹 {file_path.name[:45]:45s} 💾 {format_size(size):>10s}{dur_str}")
 
-    print(f"\n  Total size: {format_size(total_size)}")
+    print(f"\n  📦 T0t4l s1z3: {format_size(total_size)}")
 
 
 def view_output():
@@ -371,70 +431,77 @@ def view_output():
 
     if not output_files:
         print("\n╔════════════════════════════════════════════════════════════════╗")
-        print("║  NO OUTPUT FILES                                               ║")
+        print("║  ❌ N0 0UTPUT F1L3S - N0TH1N' R1PP3D Y3T!                      ║")
         print("╚════════════════════════════════════════════════════════════════╝")
-        print(f"\nNo files in: {DEST_DIR}")
+        print(f"\n📂 Output Path: {DEST_DIR.absolute()}")
+        print("\n💡 R1p s0m3 tun3s f1rst bruv!")
         return
 
     print("\n╔════════════════════════════════════════════════════════════════╗")
-    print(f"║  FILES IN RIPS FOLDER: {len(output_files)} file(s)")
-    print("╚════════════════════════════════════════════════════════════════╝\n")
+    print(f"║  🎵 F1L3S 1N R1PS F0LD3R: {len(output_files)} fil3(s)")
+    print("╚════════════════════════════════════════════════════════════════╝")
+    print(f"\n📂 Full Path: {DEST_DIR.absolute()}\n")
 
     total_size = 0
     for i, file_path in enumerate(output_files, 1):
         size = get_file_size(file_path)
         total_size += size
         mod_time = datetime.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        print(f"  {i:2d}. {file_path.name[:50]:50s} {format_size(size):>10s}  [{mod_time}]")
+        print(f"  {i:2d}. 🎵 {file_path.name[:45]:45s} 💾 {format_size(size):>10s}  📅 [{mod_time}]")
 
-    print(f"\n  Total size: {format_size(total_size)}")
+    print(f"\n  📦 T0t4l s1z3: {format_size(total_size)}")
 
 
 def show_menu():
     """Display CLI menu"""
     print("\n╔════════════════════════════════════════════════════════════════╗")
-    print("║                         MAIN MENU                              ║")
+    print("║               🎛️  M41N M3NU - CH00S3 Y3R 0PT10N 🎛️               ║")
     print("╠════════════════════════════════════════════════════════════════╣")
-    print("║  1. Start Ripping (Process all files)                         ║")
-    print("║  2. List files in To_Rip folder                               ║")
-    print("║  3. View output in Rips folder                                ║")
-    print("║  4. System check (ffmpeg, directories)                        ║")
-    print("║  5. Clear Rips folder                                         ║")
-    print("║  6. About                                                     ║")
-    print("║  0. Exit                                                      ║")
+    print("║  1️⃣  - ST4RT R1PP1NG (pr0c3ss 4ll fil3s innit)                  ║")
+    print("║  2️⃣  - L1ST F1L3S (ch3ck wh4t's in T0_R1p)                      ║")
+    print("║  3️⃣  - V13W 0UTPUT (p33k 4t y3r r1pp3d tun3s)                   ║")
+    print("║  4️⃣  - SYST3M CH3CK (v3r1fy th3 t3ch)                           ║")
+    print("║  5️⃣  - CL34R R1PS (d3l3t3 0utput fil3s)                         ║")
+    print("║  6️⃣  - S3TT1NGS (tw34k th3 c0nf1g)                              ║")
+    print("║  7️⃣  - 4B0UT (pr0p3r 1nf0)                                      ║")
+    print("║  0️⃣  - 3X1T (b4il 0ut)                                          ║")
     print("╚════════════════════════════════════════════════════════════════╝")
 
 
 def system_check():
     """Check system requirements"""
     print("\n╔════════════════════════════════════════════════════════════════╗")
-    print("║  SYSTEM CHECK                                                  ║")
+    print("║  🔧 SYST3M CH3CK - T3ST1NG TH3 K1T 🔧                          ║")
     print("╚════════════════════════════════════════════════════════════════╝\n")
 
     # Check ffmpeg
     if check_ffmpeg():
-        print("  ✓ ffmpeg installed")
+        print("  ✅ ffmpeg inst4ll3d - w1ck3d!")
         try:
             result = subprocess.run(['ffmpeg', '-version'],
                                   capture_output=True, text=True, timeout=5)
             version_line = result.stdout.split('\n')[0]
-            print(f"    {version_line}")
+            print(f"    ℹ️  {version_line}")
         except:
             pass
     else:
-        print("  ✗ ffmpeg NOT installed")
-        print("    Install: sudo apt-get install ffmpeg")
+        print("  ❌ ffmpeg N0T inst4ll3d - s0rt 1t 0ut m8!")
+        print("    💡 Inst4ll: sudo apt-get install ffmpeg")
 
     # Check directories
-    print(f"\n  Directories:")
-    print(f"    Source:      {SOURCE_DIR} {'✓' if SOURCE_DIR.exists() else '✗'}")
-    print(f"    Destination: {DEST_DIR} {'✓' if DEST_DIR.exists() else '✗'}")
+    print(f"\n  📂 D1r3ct0r13s:")
+    print(f"    Source:      {SOURCE_DIR.absolute()} {'✅' if SOURCE_DIR.exists() else '❌'}")
+    print(f"    Destination: {DEST_DIR.absolute()} {'✅' if DEST_DIR.exists() else '❌'}")
+    print(f"    Config:      {CONFIG_DIR.absolute()} {'✅' if CONFIG_DIR.exists() else '❌'}")
 
     # Check Python version
-    print(f"\n  Python:      {sys.version.split()[0]} ✓")
+    print(f"\n  🐍 Pyth0n:      {sys.version.split()[0]} ✅")
 
     # Check tqdm
-    print(f"  tqdm:        Installed ✓")
+    print(f"  📊 tqdm:        Inst4ll3d ✅")
+
+    # Platform
+    print(f"  💻 Pl4tf0rm:    {platform.system()} {platform.release()}")
 
 
 def clear_rips_folder():
@@ -443,39 +510,115 @@ def clear_rips_folder():
     output_files = [f for f in output_files if f.is_file()]
 
     if not output_files:
-        print("\n  Rips folder is already empty.")
+        print("\n  ℹ️  R1ps f0ld3r 1s 4lr34dy 3mpty innit.")
         return
 
-    print(f"\n  Found {len(output_files)} file(s) in Rips folder.")
-    confirm = input("  Delete all files? (yes/no): ").strip().lower()
+    print(f"\n  📂 Full Path: {DEST_DIR.absolute()}")
+    print(f"  ⚠️  F0und {len(output_files)} fil3(s) in R1ps f0ld3r.")
+    confirm = input("  ❓ D3l3t3 4ll fil3s? (y3s/n0): ").strip().lower()
 
-    if confirm == 'yes':
+    if confirm == 'yes' or confirm == 'y':
+        deleted = 0
         for file_path in output_files:
             try:
                 file_path.unlink()
+                deleted += 1
             except:
-                print(f"  ✗ Failed to delete: {file_path.name}")
-        print(f"  ✓ Deleted {len(output_files)} file(s)")
+                print(f"  ❌ F41l3d t0 d3l3t3: {file_path.name}")
+        print(f"  ✅ D3l3t3d {deleted} fil3(s) - 4ll cl34n bruv!")
     else:
-        print("  Cancelled.")
+        print("  ❌ C4nc3ll3d - k33p1ng y3r fil3s.")
+
+
+def show_settings(config: Dict):
+    """Show and modify settings"""
+    while True:
+        print("\n╔════════════════════════════════════════════════════════════════╗")
+        print("║              ⚙️  S3TT1NGS - TW34K TH3 C0NF1G ⚙️                  ║")
+        print("╚════════════════════════════════════════════════════════════════╝")
+        print(f"\n📂 C0nf1g Path: {CONFIG_FILE.absolute()}\n")
+        print(f"  1️⃣  - 4ud10 B1tr4t3:      {config.get('audio_bitrate', '192k')}")
+        print(f"  2️⃣  - S4mpl3 R4t3:        {config.get('sample_rate', '44100')} Hz")
+        print(f"  3️⃣  - 0utput F0rm4t:      {config.get('output_format', 'aac')}")
+        print(f"  4️⃣  - T1m30ut:            {config.get('timeout', 300)}s")
+        print(f"  5️⃣  - 4ut0 0p3n F0ld3r:   {'Y3s ✅' if config.get('auto_open_folder', False) else 'N0 ❌'}")
+        print(f"\n  9️⃣  - R3S3T T0 D3F4ULTS")
+        print(f"  0️⃣  - B4CK T0 M41N M3NU")
+
+        choice = input("\n  ❓ S3l3ct 0pt10n: ").strip()
+
+        if choice == '1':
+            bitrate = input("  💿 3nt3r 4ud10 b1tr4t3 (3.g. 192k, 256k, 320k): ").strip()
+            if bitrate:
+                config['audio_bitrate'] = bitrate
+                save_config(config)
+                print(f"  ✅ 4ud10 b1tr4t3 s3t t0: {bitrate}")
+
+        elif choice == '2':
+            rate = input("  🎚️  3nt3r s4mpl3 r4t3 (3.g. 44100, 48000): ").strip()
+            if rate.isdigit():
+                config['sample_rate'] = rate
+                save_config(config)
+                print(f"  ✅ S4mpl3 r4t3 s3t t0: {rate} Hz")
+
+        elif choice == '3':
+            fmt = input("  📝 3nt3r 0utput f0rm4t (4ac, mp3, 0gg): ").strip().lower()
+            if fmt in ['aac', 'mp3', 'ogg']:
+                config['output_format'] = fmt
+                save_config(config)
+                print(f"  ✅ 0utput f0rm4t s3t t0: {fmt}")
+
+        elif choice == '4':
+            timeout = input("  ⏱️  3nt3r t1m30ut in s3c0nds (3.g. 300): ").strip()
+            if timeout.isdigit():
+                config['timeout'] = int(timeout)
+                save_config(config)
+                print(f"  ✅ T1m30ut s3t t0: {timeout}s")
+
+        elif choice == '5':
+            auto = input("  📂 4ut0 0p3n f0ld3r 4ft3r r1pp1ng? (y3s/n0): ").strip().lower()
+            config['auto_open_folder'] = (auto == 'yes' or auto == 'y')
+            save_config(config)
+            status = "3n4bl3d ✅" if config['auto_open_folder'] else "d1s4bl3d ❌"
+            print(f"  ✅ 4ut0 0p3n f0ld3r {status}")
+
+        elif choice == '9':
+            confirm = input("  ⚠️  R3s3t 4ll s3tt1ngs t0 d3f4ults? (y3s/n0): ").strip().lower()
+            if confirm == 'yes' or confirm == 'y':
+                config.update(DEFAULT_CONFIG)
+                save_config(config)
+                print("  ✅ S3tt1ngs r3s3t t0 d3f4ults!")
+
+        elif choice == '0':
+            print("  ⬅️  B4ck t0 m41n m3nu...")
+            break
+
+        else:
+            print("  ❌ 1nv4l1d 0pt10n - try 4g41n bruv!")
+
+        time.sleep(1)
 
 
 def show_about():
     """Show about information"""
     print("\n╔════════════════════════════════════════════════════════════════╗")
-    print("║  RAVEDUMP RIPPER v2.0                                          ║")
+    print("║  🎉 R4V3DUMP R1PP3R v2.1 - PR0P3R L33T 🎉                      ║")
     print("╠════════════════════════════════════════════════════════════════╣")
-    print("║  Advanced audio extraction tool for video files               ║")
+    print("║  4dv4nc3d 4ud10 3xtr4ct10n t00l f0r vid30 fil3s               ║")
     print("║                                                                ║")
-    print("║  Features:                                                     ║")
-    print("║  • Extract audio from any video format                        ║")
-    print("║  • Handle broken/corrupted files                              ║")
-    print("║  • Smart codec detection and copying                          ║")
-    print("║  • Automatic fallback to re-encoding                          ║")
-    print("║  • Real-time progress tracking                                ║")
-    print("║  • Detailed statistics                                        ║")
+    print("║  ✨ F34tur3s:                                                  ║")
+    print("║  🎵 3xtr4ct 4ud10 fr0m 4ny vid30 f0rm4t                       ║")
+    print("║  🔧 H4ndl3 br0k3n/c0rrupt3d fil3s l1k3 4 b0ss                 ║")
+    print("║  ⚡ Sm4rt c0d3c d3t3ct10n 4nd c0py1ng                         ║")
+    print("║  🔄 4ut0m4t1c f4llb4ck t0 r3-3nc0d1ng                         ║")
+    print("║  📊 R34l-t1m3 pr0gr3ss tr4ck1ng                               ║")
+    print("║  📈 D3t41l3d st4t1st1cs 4nd 4n4lyt1cs                         ║")
+    print("║  ⚙️  C0nf1gur4bl3 s3tt1ngs 1n /c0nf1g/                        ║")
+    print("║  🎛️  1nt3r4ct1v3 CL1 w1th pr0p3r sl4ng                        ║")
     print("║                                                                ║")
-    print("║  Supports: MP4, AVI, MKV, MOV, FLV, WMV, WebM, M4V, MPG       ║")
+    print("║  📼 Supp0rts: MP4, 4V1, MKV, M0V, FLV, WMV, W3bM, M4V, MPG    ║")
+    print("║                                                                ║")
+    print("║  💾 C0d3d w1th pr0p3r l33t sp34k 4nd c0ckn3y sl4ng m8!        ║")
     print("╚════════════════════════════════════════════════════════════════╝")
 
 
@@ -486,65 +629,88 @@ def main():
     # Create directories
     create_directories()
 
+    # Load config
+    config = load_config()
+
     # Check ffmpeg
     if not check_ffmpeg():
-        print("\n✗ ERROR: ffmpeg is not installed!")
-        print("Please install ffmpeg:")
-        print("  Ubuntu/Debian: sudo apt-get install ffmpeg")
-        print("  MacOS: brew install ffmpeg")
-        print("  Windows: Download from https://ffmpeg.org/download.html")
-        input("\nPress Enter to exit...")
+        print("\n❌ 3RR0R: ffmpeg 41n't inst4ll3d bruv!")
+        print("📥 Pl34s3 inst4ll ffmpeg:")
+        print("  🐧 Ubuntu/Debian: sudo apt-get install ffmpeg")
+        print("  🍎 MacOS: brew install ffmpeg")
+        print("  🪟 Windows: Download from https://ffmpeg.org/download.html")
+        input("\n⏎  Pr3ss 3nt3r t0 3x1t...")
         sys.exit(1)
 
     while True:
         show_menu()
-        choice = input("\nSelect option: ").strip()
+        choice = input("\n  ❓ S3l3ct 0pt10n: ").strip()
 
         if choice == '1':
             video_files = get_video_files()
             if not video_files:
-                print("\n✗ No video files found in To_Rip folder!")
-                print("  Add video files and try again.")
-                input("\nPress Enter to continue...")
+                print("\n  ❌ N0 vid30 fil3s f0und in T0_R1p f0ld3r!")
+                print(f"  📂 Path: {SOURCE_DIR.absolute()}")
+                print("  💡 4dd s0m3 vid30s 4nd try 4g41n m8!")
+                input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
                 continue
 
-            print(f"\n  Found {len(video_files)} file(s) ready to rip.")
-            confirm = input("  Start ripping? (yes/no): ").strip().lower()
+            print(f"\n  📦 F0und {len(video_files)} fil3(s) r34dy t0 r1p.")
+            print(f"  📂 Source: {SOURCE_DIR.absolute()}")
+            print(f"  📂 Dest:   {DEST_DIR.absolute()}")
+            confirm = input("  ❓ ST4RT R1PP1NG? (y3s/n0): ").strip().lower()
 
-            if confirm == 'yes':
-                process_files(video_files)
+            if confirm == 'yes' or confirm == 'y':
+                process_files(video_files, config)
                 print_statistics()
-                input("\nPress Enter to continue...")
+
+                # Ask to open folder
+                if config.get('auto_open_folder', False):
+                    open_choice = 'y'
+                else:
+                    open_choice = input("  📂 0p3n R1ps f0ld3r? (y/n): ").strip().lower()
+
+                if open_choice == 'y' or open_choice == 'yes':
+                    open_folder(DEST_DIR)
+
+                input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
             else:
-                print("  Cancelled.")
+                print("  ❌ C4nc3ll3d - n0 w0rr13s bruv.")
 
         elif choice == '2':
             list_files()
-            input("\nPress Enter to continue...")
+            input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
 
         elif choice == '3':
             view_output()
-            input("\nPress Enter to continue...")
+            open_choice = input("\n  📂 0p3n R1ps f0ld3r? (y/n): ").strip().lower()
+            if open_choice == 'y' or open_choice == 'yes':
+                open_folder(DEST_DIR)
+            input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
 
         elif choice == '4':
             system_check()
-            input("\nPress Enter to continue...")
+            input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
 
         elif choice == '5':
             clear_rips_folder()
-            input("\nPress Enter to continue...")
+            input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
 
         elif choice == '6':
+            show_settings(config)
+
+        elif choice == '7':
             show_about()
-            input("\nPress Enter to continue...")
+            input("\n  ⏎  Pr3ss 3nt3r t0 c0nt1nu3...")
 
         elif choice == '0':
-            print("\n  Thanks for using RAVEDUMP RIPPER!")
-            print("  Goodbye.\n")
+            print("\n  👋 Ch33rs f0r us1ng R4V3DUMP R1PP3R!")
+            print("  🎵 K33p r1pp1ng th0s3 tun3s bruv!")
+            print("  ✌️  L4t3rs! ✌️\n")
             break
 
         else:
-            print("\n  ✗ Invalid option. Please try again.")
+            print("\n  ❌ 1nv4l1d 0pt10n - try 4g41n m8!")
             time.sleep(1)
 
 
